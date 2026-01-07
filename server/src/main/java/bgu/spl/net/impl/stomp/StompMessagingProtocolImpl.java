@@ -67,6 +67,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
+        
         connected = true;
         String response = "CONNECTED\nversion:1.2\n\n\0";
         connections.send(connectionId, response); //YA - send CONNECTED frame back to client
