@@ -3,6 +3,7 @@ package bgu.spl.net.impl.stomp;
 import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.Connections;
 import bgu.spl.net.impl.stomp.ConnectionsImpl;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -63,7 +64,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
             default:
                 sendError("Unknown command", null, message);
-                shouldTerminate = true;
+                shouldTerminate = true; //YA - mandatory close after ERROR
         }
     }
 
@@ -80,13 +81,13 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         }
 
         if (this.login == null || passcode == null) {
-            sendError("Missing login or passcode", null, originalFrame); //YA - send ERROR frame if no login/passcode
+            sendError("Missing login or passcode", null, originalFrame);
             shouldTerminate = true;
             return;
         }
 
         if (loggedInUsers.contains(this.login)) {
-            sendError("User already logged in", null, originalFrame); //YA - send ERROR frame if user already logged in
+            sendError("User already logged in", null, originalFrame);
             shouldTerminate = true;
             return;
         }
@@ -101,7 +102,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         connected = true;
 
         String response = "CONNECTED\nversion:1.2\n\n\0";
-        connections.send(connectionId, response); //YA - send CONNECTED frame back to client
+        connections.send(connectionId, response);
     }
 
     private void handleSubscribe(String[] lines, String originalFrame) { //YA - handle SUBSCRIBE command
@@ -117,11 +118,11 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
         for (int i = 1; i < lines.length; i++) {
             if (lines[i].startsWith("destination:")) {
-                destination = lines[i].substring("destination:".length()); //YA - get destination
+                destination = lines[i].substring("destination:".length());
             } else if (lines[i].startsWith("id:")) {
-                subscriptionId = Integer.parseInt(lines[i].substring("id:".length())); //YA - get subscription id
+                subscriptionId = Integer.parseInt(lines[i].substring("id:".length()));
             } else if (lines[i].startsWith("receipt:")) {
-                receiptId = lines[i].substring("receipt:".length()); // YA - get receipt id if exists
+                receiptId = lines[i].substring("receipt:".length());
             }
         }
 
@@ -131,39 +132,43 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        //YA - store the subscription
         subscriptions.put(subscriptionId, destination);
 
-        //YA - subscribe in ConnectionsImpl
         ((ConnectionsImpl<String>) connections)
                 .subscribe(connectionId, destination, subscriptionId);
 
         if (receiptId != null)
-            sendReceipt(receiptId); //YA - send RECEIPT frame if receipt id exists
+            sendReceipt(receiptId);
     }
 
     private void handleUnsubscribe(String[] lines, String originalFrame) { //YA - handle UNSUBSCRIBE command
+        if (!connected) { //YA - must be connected
+            sendError("Not connected", null, originalFrame);
+            shouldTerminate = true;
+            return;
+        }
+
         Integer subscriptionId = null;
         String receiptId = null;
 
         for (int i = 1; i < lines.length; i++) {
             if (lines[i].startsWith("id:")) {
-                subscriptionId = Integer.parseInt(lines[i].substring("id:".length())); //YA - get subscription id
+                subscriptionId = Integer.parseInt(lines[i].substring("id:".length()));
             } else if (lines[i].startsWith("receipt:")) {
-                receiptId = lines[i].substring("receipt:".length()); // YA - get receipt id if exists
+                receiptId = lines[i].substring("receipt:".length());
             }
         }
 
-        if (subscriptionId == null || !subscriptions.containsKey(subscriptionId)) { //YA - invalid subscription id - error msg
+        if (subscriptionId == null || !subscriptions.containsKey(subscriptionId)) {
             sendError("Invalid subscription id", receiptId, originalFrame);
             shouldTerminate = true;
             return;
         }
 
-        String channel = subscriptions.remove(subscriptionId); //YA - remove subscription
+        String channel = subscriptions.remove(subscriptionId);
 
         ((ConnectionsImpl<String>) connections)
-                .unsubscribeFromChannel(connectionId, channel); //YA - unsubscribe in ConnectionsImpl
+                .unsubscribeFromChannel(connectionId, channel);
 
         if (receiptId != null)
             sendReceipt(receiptId);
@@ -186,9 +191,9 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
                 break;
             }
             if (lines[i].startsWith("destination:")) {
-                destination = lines[i].substring("destination:".length()); //YA - get destination
+                destination = lines[i].substring("destination:".length());
             } else if (lines[i].startsWith("receipt:")) {
-                receiptId = lines[i].substring("receipt:".length()); //YA - get receipt id if exists
+                receiptId = lines[i].substring("receipt:".length());
             }
         }
 
@@ -198,20 +203,27 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        StringBuilder body = new StringBuilder();  //YA - extract body - after empty line
+        StringBuilder body = new StringBuilder();  //YA - extract body
         for (int i = bodyStart; i < lines.length; i++) {
             body.append(lines[i]);
             if (i < lines.length - 1)
                 body.append("\n");
         }
 
-        //YA - build MESSAGE Frame
-        String messageFrame =
-                "MESSAGE\n" +
-                "destination:" + destination + "\n\n" +
-                body.toString() + "\n\0";
+        ConnectionsImpl<String> connImpl = (ConnectionsImpl<String>) connections;
 
-        connections.send(destination, messageFrame);
+        //YA - send MESSAGE to each subscriber with subscription header
+        for (Integer connId : connImpl.getSubscribers(destination)) {
+            Integer subId = connImpl.getSubscriptionId(connId, destination);
+
+            String messageFrame =
+                    "MESSAGE\n" +
+                    "subscription:" + subId + "\n" +
+                    "destination:" + destination + "\n\n" +
+                    body + "\n\0";
+
+            connections.send(connId, messageFrame);
+        }
 
         if (receiptId != null)
             sendReceipt(receiptId);

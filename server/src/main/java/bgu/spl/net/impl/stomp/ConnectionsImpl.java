@@ -101,4 +101,14 @@ public class ConnectionsImpl<T> implements Connections<T> {
         Map<Integer, Integer> subs = channelSubs.get(channel);// YA get subscribers of channel
         return subs == null ? null : subs.get(connectionId);// YA return subscriptionId or null if not subscribed
     }
+
+// YA get all subscribers of a channel
+public Set<Integer> getSubscribers(String channel) {
+    Map<Integer, Integer> subs = channelSubs.get(channel);
+    if (subs == null)
+        return java.util.Collections.emptySet(); // Java 8 safe
+    return subs.keySet();
+}
+
+
 }
