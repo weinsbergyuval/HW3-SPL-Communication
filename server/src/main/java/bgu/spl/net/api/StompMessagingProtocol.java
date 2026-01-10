@@ -15,3 +15,7 @@ public interface StompMessagingProtocol<T>  {
      */
     boolean shouldTerminate();
 }
+//YA - the STOMP messaging protocol is in charge of:
+//1. knows the state of the client - connected/disconnected to which channels
+//2. processing a message that was received from a client
+//3. determining whether the connection should be terminated

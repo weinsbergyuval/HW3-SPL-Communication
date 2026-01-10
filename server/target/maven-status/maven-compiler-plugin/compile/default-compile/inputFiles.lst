@@ -8,6 +8,7 @@
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/impl/rci/ObjectEncoderDecoder.java
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/srv/Reactor.java
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/api/MessageEncoderDecoder.java
+/workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/impl/stomp/StompMessageEncoderDecoder.java
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/impl/echo/LineMessageEncoderDecoder.java
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/srv/Connections.java
 /workspaces/Assignment 3 SPL/server/src/main/java/bgu/spl/net/impl/data/Database.java
