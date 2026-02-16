@@ -1,9 +1,8 @@
 package bgu.spl.net.impl.stomp;
 
-import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.Connections;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * YA - STOMP protocol implementation
  * YA - Implements MessagingProtocol<String> as required by the server API
  */
-public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
+public class StompMessagingProtocolImpl implements StompMessagingProtocol<String> {
 
     // YA - unique id of this connection
     private int connectionId;
@@ -22,7 +21,7 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
     private Connections<String> connections;
 
     // YA - subscriptionId -> destination
-    private final Map<Integer, String> subscriptions = new HashMap<>();
+    private final Map<Integer, String> subscriptions = new ConcurrentHashMap<>();
 
     // YA - logged-in users (to prevent duplicate logins)
     private static final Set<String> loggedInUsers =
@@ -42,6 +41,7 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
     /**
      * YA - called once when protocol instance is created
      */
+    @Override
     public void start(int connectionId, Connections<String> connections) {
         this.connectionId = connectionId;
         this.connections = connections;
@@ -53,8 +53,11 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
      */
     @Override
     public String process(String message) {
+        if (shouldTerminate) return null;
 
+        message = message.replace("\0", "");
         String[] lines = message.split("\n");
+        if (lines.length == 0) return null; // YA - if empty frame, ignore
         String command = lines[0];
 
         switch (command) {
@@ -83,8 +86,7 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
                 break;
         }
 
-        // YA - STOMP never returns automatic response
-        return null;
+        return null; // YA - replies are sent via connections.send(...)
     }
 
     @Override
@@ -98,6 +100,11 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
         String passcode = null;
         login = null;
 
+        if (connected) {
+            sendError("Already connected", null, originalFrame);
+            return;
+        }
+
         for (int i = 1; i < lines.length; i++) {
             if (lines[i].startsWith("login:"))
                 login = lines[i].substring("login:".length());
@@ -110,7 +117,7 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
             return;
         }
 
-        if (connected || !loggedInUsers.add(login)) {
+        if (!loggedInUsers.add(login)) { //YA - returns false if login already exists, adds login otherwise
             sendError("User already logged in", null, originalFrame);
             return;
         }
@@ -148,10 +155,14 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
             return;
         }
 
+        if (subscriptions.containsKey(id)) {
+            sendError("Subscription id already exists", receipt, originalFrame);
+            return;
+        }
+
         subscriptions.put(id, destination);
 
-        ((ConnectionsImpl<String>) connections)
-                .subscribe(connectionId, destination, id);
+        connections.subscribe(connectionId, destination, id);
 
         if (receipt != null)
             sendReceipt(receipt);
@@ -173,15 +184,19 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
                 receipt = lines[i].substring("receipt:".length());
         }
 
-        if (id == null || !subscriptions.containsKey(id)) {
+        if (id == null) {
             sendError("Invalid subscription id", receipt, originalFrame);
             return;
         }
 
-        String destination = subscriptions.remove(id);
+        String destination = subscriptions.remove(id); // YA - if no id destination == null
 
-        ((ConnectionsImpl<String>) connections)
-                .unsubscribeFromChannel(connectionId, destination);
+        if (destination == null) {
+            sendError("Subscription does not exist", receipt, originalFrame);
+            return;
+        }
+
+        connections.unsubscribeFromChannel(connectionId, destination);
 
         if (receipt != null)
             sendReceipt(receipt);
@@ -213,7 +228,7 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
             return;
         }
 
-        if (!subscriptions.containsValue(destination)) {
+        if (connections.getSubscriptionId(connectionId, destination) == null) {
             sendError("User is not subscribed to destination", receipt, originalFrame);
             return;
         }
@@ -225,11 +240,8 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
                 body.append("\n");
         }
 
-        ConnectionsImpl<String> connImpl =
-                (ConnectionsImpl<String>) connections;
-
-        for (Integer connId : connImpl.getSubscribers(destination)) {
-            Integer subId = connImpl.getSubscriptionId(connId, destination);
+        for (Integer connId : connections.getSubscribers(destination)) {
+            Integer subId = connections.getSubscriptionId(connId, destination);
             int msgId = messageIdCounter.getAndIncrement();
 
             String frame =
@@ -247,22 +259,25 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
     }
 
     private void handleDisconnect(String[] lines) {
-        String receipt = null;
+    String receipt = null;
 
-        for (int i = 1; i < lines.length; i++) {
-            if (lines[i].startsWith("receipt:"))
-                receipt = lines[i].substring("receipt:".length());
-        }
-
-        if (receipt != null)
-            sendReceipt(receipt);
-
-        if (login != null)
-            loggedInUsers.remove(login);
-
-        connections.disconnect(connectionId);
-        shouldTerminate = true;
+    for (int i = 1; i < lines.length; i++) {
+        if (lines[i].startsWith("receipt:"))
+            receipt = lines[i].substring("receipt:".length());
     }
+
+    if (receipt != null)
+        sendReceipt(receipt);
+
+    if (login != null)
+        loggedInUsers.remove(login);
+
+    // YA - disconnect from server connections
+    connections.disconnect(connectionId);
+
+    shouldTerminate = true;
+}
+
 
     /* ===================== helpers ===================== */
 
@@ -293,7 +308,6 @@ public class StompMessagingProtocolImpl implements MessagingProtocol<String> {
         if (login != null)
             loggedInUsers.remove(login);
 
-        connections.disconnect(connectionId);
         shouldTerminate = true;
     }
 }

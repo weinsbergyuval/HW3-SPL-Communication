@@ -1,30 +1,52 @@
 package bgu.spl.net.impl.stomp;
 
+import bgu.spl.net.api.MessageEncoderDecoder;
+import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.Server;
 
-/**
- * YA - Main class for STOMP server
- * YA - Responsible only for starting the server and wiring components together
- */
+import java.util.function.Supplier;
+
 public class StompServer {
 
     public static void main(String[] args) {
 
-        // YA - default port if not provided
-        int port = 7777;
-        if (args.length > 0) {
-            port = Integer.parseInt(args[0]);
+        if (args.length < 2) {
+            System.out.println("Usage: <port> <tpc|reactor>");
+            return;
         }
 
-        // YA - number of worker threads for Reactor
-        int numThreads = Runtime.getRuntime().availableProcessors();
+        int port = Integer.parseInt(args[0]);
+        String serverType = args[1];
 
-        // YA - start STOMP server using Reactor pattern
-        Server.reactor(
-                numThreads,
-                port,
-                () -> new StompMessagingProtocolImpl(), // YA - create a new STOMP protocol per client
-                StompMessageEncoderDecoder::new         // YA - STOMP frame encoder/decoder (\0 terminated)
-        ).serve();
+        // YA - STOMP protocol factory
+        Supplier<MessagingProtocol<String>> protocolFactory = StompMessagingProtocolImpl::new;
+
+
+        // YA - encoder/decoder factory
+        Supplier<MessageEncoderDecoder<String>> encdecFactory = StompMessageEncoderDecoder::new;
+
+        if (serverType.equals("tpc")) {
+
+            Server.threadPerClient(
+                    port,
+                    protocolFactory,
+                    encdecFactory
+            ).serve();
+
+        } else if (serverType.equals("reactor")) {
+
+            int numThreads = Runtime.getRuntime().availableProcessors();
+
+            Server.reactor(
+                    numThreads,
+                    port,
+                    protocolFactory,
+                    encdecFactory
+            ).serve();
+
+        } else {
+            System.out.println("Unknown server type: " + serverType + " (use tpc or reactor)");
+        }
     }
 }

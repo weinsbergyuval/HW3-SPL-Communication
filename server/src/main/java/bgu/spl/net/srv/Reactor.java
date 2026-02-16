@@ -2,6 +2,9 @@ package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
 import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.stomp.ConnectionsImpl;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.ClosedSelectorException;
@@ -15,6 +18,13 @@ import java.util.function.Supplier;
 public class Reactor<T> implements Server<T> {
 
     private final int port;
+
+        // YA - shared connections implementation
+    private final ConnectionsImpl<T> connections = new ConnectionsImpl<>();
+
+    // YA - global connection id generator
+    private static final java.util.concurrent.atomic.AtomicInteger idCounter =
+            new java.util.concurrent.atomic.AtomicInteger(1);
 
     // YA - factory for creating a new protocol instance per connection
     private final Supplier<MessagingProtocol<T>> protocolFactory;
@@ -102,25 +112,36 @@ public class Reactor<T> implements Server<T> {
         }
     }
 
+
     private void handleAccept(ServerSocketChannel serverChan, Selector selector) throws IOException {
-        SocketChannel clientChan = serverChan.accept();
-        clientChan.configureBlocking(false);
+    SocketChannel clientChan = serverChan.accept();
+    clientChan.configureBlocking(false);
 
-        // YA - create a NonBlockingConnectionHandler per client
-        // YA - it holds:
-        // YA - 1) STOMP protocol instance
-        // YA - 2) STOMP encoder/decoder
-        // YA - 3) the socket channel
-        final NonBlockingConnectionHandler<T> handler =
-                new NonBlockingConnectionHandler<>(
-                        readerFactory.get(),      // YA - StompMessageEncoderDecoder
-                        protocolFactory.get(),    // YA - StompMessagingProtocolImpl
-                        clientChan,
-                        this);
+    // YA - generate unique connection id
+    int connectionId = idCounter.getAndIncrement();
 
-        // YA - register client channel for READ events
-        clientChan.register(selector, SelectionKey.OP_READ, handler);
-    }
+    // YA - create protocol & encoder/decoder
+    StompMessagingProtocol<T> protocol = (StompMessagingProtocol<T>) protocolFactory.get();
+    MessageEncoderDecoder<T> encdec = readerFactory.get();
+
+    // YA - create a NonBlockingConnectionHandler per client
+    final NonBlockingConnectionHandler<T> handler =
+            new NonBlockingConnectionHandler<>(
+                    encdec,
+                    protocol,
+                    clientChan,
+                    this);
+
+    // YA - register handler in connections
+    connections.register(connectionId, handler);
+
+    // YA - initialize protocol with connectionId and connections
+    protocol.start(connectionId, connections);
+
+    // YA - register client channel for READ events
+    clientChan.register(selector, SelectionKey.OP_READ, handler);
+}
+
 
     private void handleReadWrite(SelectionKey key) {
         @SuppressWarnings("unchecked")
@@ -149,6 +170,14 @@ public class Reactor<T> implements Server<T> {
             selectorTasks.remove().run();
         }
     }
+
+    // YA - notify connections that handler is disconnected
+public void notifyDisconnect(NonBlockingConnectionHandler<T> handler) {
+    // YA - iterate and find connectionId
+    // (simple approach: let protocol already request disconnect)
+    // connections.disconnect(connectionId); // already handled by protocol
+}
+
 
     @Override
     public void close() throws IOException {

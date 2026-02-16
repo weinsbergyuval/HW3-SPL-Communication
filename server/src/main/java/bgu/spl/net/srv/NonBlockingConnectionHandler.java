@@ -74,7 +74,13 @@ public class NonBlockingConnectionHandler<T> implements ConnectionHandler<T> {
         } catch (IOException ex) {
             ex.printStackTrace();
         }
+
+        // YA - notify connections about disconnect
+        if (protocol.shouldTerminate()) {
+            reactor.notifyDisconnect(this);
+        }
     }
+
 
     public boolean isClosed() {
         return !chan.isOpen();
