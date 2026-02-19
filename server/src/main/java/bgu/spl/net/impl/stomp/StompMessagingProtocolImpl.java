@@ -1,10 +1,10 @@
 package bgu.spl.net.impl.stomp;
 
 import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.data.Database;
 import bgu.spl.net.srv.Connections;
-
+import bgu.spl.net.impl.data.LoginStatus;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -23,9 +23,8 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     // YA - subscriptionId -> destination
     private final Map<Integer, String> subscriptions = new ConcurrentHashMap<>();
 
-    // YA - logged-in users (to prevent duplicate logins)
-    private static final Set<String> loggedInUsers =
-            ConcurrentHashMap.newKeySet();
+    // YA - static maps for user management (shared across all protocol instances)
+    private final Database database = Database.getInstance();
 
     // YA - current user login
     private String login = null;
@@ -97,39 +96,54 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     /* ===================== handlers ===================== */
 
     private void handleConnect(String[] lines, String originalFrame) {
-        String passcode = null;
-        login = null;
+    String username = null;
+    String passcode = null;
 
-        if (connected) {
-            sendError("Already connected", null, originalFrame);
-            return;
-        }
-
-        for (int i = 1; i < lines.length; i++) {
-            if (lines[i].startsWith("login:"))
-                login = lines[i].substring("login:".length());
-            else if (lines[i].startsWith("passcode:"))
-                passcode = lines[i].substring("passcode:".length());
-        }
-
-        if (login == null || passcode == null) {
-            sendError("Missing login or passcode", null, originalFrame);
-            return;
-        }
-
-        if (!loggedInUsers.add(login)) { //YA - returns false if login already exists, adds login otherwise
-            sendError("User already logged in", null, originalFrame);
-            return;
-        }
-
-        connected = true;
-
-        String response =
-                "CONNECTED\n" +
-                "version:1.2\n\n\0";
-
-        connections.send(connectionId, response);
+    if (connected) {
+        sendError("Already connected", null, originalFrame);
+        return;
     }
+
+    for (int i = 1; i < lines.length; i++) {
+        if (lines[i].startsWith("login:"))
+            username = lines[i].substring("login:".length());
+        else if (lines[i].startsWith("passcode:"))
+            passcode = lines[i].substring("passcode:".length());
+    }
+
+    if (username == null || passcode == null) {
+        sendError("Missing login or passcode", null, originalFrame);
+        return;
+    }
+
+    LoginStatus status = database.login(connectionId, username, passcode);
+
+    switch (status) {
+        case ADDED_NEW_USER:
+        case LOGGED_IN_SUCCESSFULLY:
+            this.login = username;
+            this.connected = true;
+            connections.send(connectionId,
+                    "CONNECTED\nversion:1.2\n\n\0");
+            break;
+
+        case ALREADY_LOGGED_IN:
+            sendError("User already logged in", null, originalFrame);
+            break;
+
+        case WRONG_PASSWORD:
+            sendError("Wrong password", null, originalFrame);
+            break;
+
+        case CLIENT_ALREADY_CONNECTED:
+            sendError("Client already connected", null, originalFrame);
+            break;
+
+        default:
+            sendError("Login failed", null, originalFrame);
+    }
+}
+
 
     private void handleSubscribe(String[] lines, String originalFrame) {
         if (!connected) {
@@ -203,60 +217,70 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     }
 
     private void handleSend(String[] lines, String originalFrame) {
-        if (!connected) {
-            sendError("Not connected", null, originalFrame);
-            return;
-        }
+    String filename = null;
 
-        String destination = null;
-        String receipt = null;
-        int bodyStart = -1;
-
-        for (int i = 1; i < lines.length; i++) {
-            if (lines[i].isEmpty()) {
-                bodyStart = i + 1;
-                break;
-            }
-            if (lines[i].startsWith("destination:"))
-                destination = lines[i].substring("destination:".length());
-            else if (lines[i].startsWith("receipt:"))
-                receipt = lines[i].substring("receipt:".length());
-        }
-
-        if (destination == null || bodyStart == -1) {
-            sendError("Missing destination header", receipt, originalFrame);
-            return;
-        }
-
-        if (connections.getSubscriptionId(connectionId, destination) == null) {
-            sendError("User is not subscribed to destination", receipt, originalFrame);
-            return;
-        }
-
-        StringBuilder body = new StringBuilder();
-        for (int i = bodyStart; i < lines.length; i++) {
-            body.append(lines[i]);
-            if (i < lines.length - 1)
-                body.append("\n");
-        }
-
-        for (Integer connId : connections.getSubscribers(destination)) {
-            Integer subId = connections.getSubscriptionId(connId, destination);
-            int msgId = messageIdCounter.getAndIncrement();
-
-            String frame =
-                    "MESSAGE\n" +
-                    "subscription:" + subId + "\n" +
-                    "message-id:" + msgId + "\n" +
-                    "destination:" + destination + "\n\n" +
-                    body + "\n\0";
-
-            connections.send(connId, frame);
-        }
-
-        if (receipt != null)
-            sendReceipt(receipt);
+    if (!connected) {
+        sendError("Not connected", null, originalFrame);
+        return;
     }
+
+    String destination = null;
+    String receipt = null;
+    int bodyStart = -1;
+
+    for (int i = 1; i < lines.length; i++) {
+        if (lines[i].isEmpty()) {
+            bodyStart = i + 1;
+            break;
+        }
+        if (lines[i].startsWith("destination:"))
+            destination = lines[i].substring("destination:".length());
+        else if (lines[i].startsWith("receipt:"))
+            receipt = lines[i].substring("receipt:".length());
+        else if (lines[i].startsWith("file:"))
+            filename = lines[i].substring("file:".length());
+    }
+
+    if (destination == null || bodyStart == -1) {
+        sendError("Missing destination header", receipt, originalFrame);
+        return;
+    }
+
+    if (connections.getSubscriptionId(connectionId, destination) == null) {
+        sendError("User is not subscribed to destination", receipt, originalFrame);
+        return;
+    }
+
+    StringBuilder body = new StringBuilder();
+    for (int i = bodyStart; i < lines.length; i++) {
+        body.append(lines[i]);
+        if (i < lines.length - 1)
+            body.append("\n");
+    }
+
+    // YA - track file upload ONCE per report
+    if (filename != null && login != null) {
+        database.trackFileUpload(login, filename, destination);
+    }
+
+    for (Integer connId : connections.getSubscribers(destination)) {
+        Integer subId = connections.getSubscriptionId(connId, destination);
+        int msgId = messageIdCounter.getAndIncrement();
+
+        String frame =
+                "MESSAGE\n" +
+                "subscription:" + subId + "\n" +
+                "message-id:" + msgId + "\n" +
+                "destination:" + destination + "\n\n" +
+                body + "\n\0";
+
+        connections.send(connId, frame);
+    }
+
+    if (receipt != null)
+        sendReceipt(receipt);
+}
+
 
     private void handleDisconnect(String[] lines) {
     String receipt = null;
@@ -269,13 +293,15 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     if (receipt != null)
         sendReceipt(receipt);
 
-    if (login != null)
-        loggedInUsers.remove(login);
+    database.logout(connectionId);
+
+    subscriptions.clear();
 
     // YA - disconnect from server connections
     connections.disconnect(connectionId);
 
     shouldTerminate = true;
+    connected = false;
 }
 
 
@@ -305,9 +331,10 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
         connections.send(connectionId, frame.toString());
 
-        if (login != null)
-            loggedInUsers.remove(login);
-
+        // YA - STOMP spec: ERROR must close the connection
+        connections.disconnect(connectionId);
         shouldTerminate = true;
+        connected = false;
+
     }
 }

@@ -73,4 +73,9 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
             try { close(); } catch (IOException ignored) {}
         }
     }
+
+    public MessagingProtocol<T> getProtocol() {
+        return protocol;
+    }
+
 }

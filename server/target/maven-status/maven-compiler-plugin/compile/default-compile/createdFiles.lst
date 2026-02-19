@@ -24,6 +24,7 @@ bgu/spl/net/impl/newsfeed/PublishNewsCommand.class
 bgu/spl/net/api/MessageEncoderDecoder.class
 bgu/spl/net/impl/stomp/ConnectionsImpl.class
 bgu/spl/net/srv/Connections.class
+bgu/spl/net/impl/stomp/StompMessagingProtocolImpl$1.class
 bgu/spl/net/impl/data/LoginStatus.class
 bgu/spl/net/impl/stomp/StompMessagingProtocolImpl.class
 bgu/spl/net/impl/data/Database$1.class

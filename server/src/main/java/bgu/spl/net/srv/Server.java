@@ -2,7 +2,11 @@ package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
 import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.stomp.ConnectionsImpl;
+
 import java.io.Closeable;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 public interface Server<T> extends Closeable {
@@ -21,16 +25,35 @@ public interface Server<T> extends Closeable {
      * @return A new Thread per client server
      */
     public static <T> Server<T>  threadPerClient(
-            int port,
-            Supplier<MessagingProtocol<T> > protocolFactory,
-            Supplier<MessageEncoderDecoder<T> > encoderDecoderFactory) {
+        int port,
+        Supplier<MessagingProtocol<T> > protocolFactory,
+        Supplier<MessageEncoderDecoder<T> > encoderDecoderFactory) {
+
+        ConnectionsImpl<T> connections = new ConnectionsImpl<>();
+        AtomicInteger connectionIdCounter = new AtomicInteger(1);
+
 
         return new BaseServer<T>(port, protocolFactory, encoderDecoderFactory) {
             @Override
-            protected void execute(BlockingConnectionHandler<T>  handler) {
-                new Thread(handler).start();
+            protected void execute(BlockingConnectionHandler<T> handler) {
+            int connectionId = connectionIdCounter.getAndIncrement();
+
+            // register handler so server can send messages to it
+            connections.register(connectionId, handler);
+
+            // initialize protocol before processing messages
+            MessagingProtocol<T> protocol = handler.getProtocol();
+
+            if (protocol instanceof StompMessagingProtocol) {
+                ((bgu.spl.net.api.StompMessagingProtocol<T>) protocol)
+                        .start(connectionId, connections);
             }
+
+            new Thread(handler).start();
+}
+
         };
+    
 
     }
 
